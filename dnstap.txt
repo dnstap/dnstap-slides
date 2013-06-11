@@ -1,0 +1,408 @@
+% _dnstap_: high speed DNS server event replication without packet capture
+% Robert Edmonds (<edmonds@isc.org>)
+% 13 June 2013
+
+# Introduction
+
+The DNS protocol is really complicated.
+
+Extracting event information like client queries and cache updates from a
+running DNS server is hard.
+
+Let's build something flexible that can replace or supplement existing
+event monitoring technology.
+
+# Contents
+
+1) DNS overview
+2) Existing monitoring technologies
+    i. Query logging
+    ii. Passive DNS replication
+3) New technology: **dnstap**
+4) Getting the code
+5) Future plans
+
+# DNS overview
+
+![](diagrams/dns_concepts.png)
+
+# Query logging
+
+![](diagrams/query_logging.png)
+
+# Query logging
+
+Log information about **queries**:
+
+* Client IP address.
+* Question name.
+* Question type.
+
+Usually [`syslog`](http://en.wikipedia.org/wiki/Syslog) based.
+
+Core idea: the query log is generated internally by the DNS server in the normal
+course of request processing.
+
+# Query logging: [BIND4](http://ftp.isc.org/isc/bind4/src/DEPRECATED/)
+
+~~~ {.c}
+#ifdef QRYLOG
+     if (qrylog) {
+             syslog(LOG_INFO, "XX /%s/%s/%s",
+                    inet_ntoa(from->sin_addr),
+                    (dname[0] == '\0') ?"." :dname,
+                    p_type(type));
+     }
+#endif /*QRYLOG*/
+~~~
+
+-- BIND 4.9.2 `named/ns_req.c`, circa 1994
+
+# Query logging: [Unbound](https://www.unbound.net/)
+
+~~~
+log-queries: <yes or no>
+    Prints one line per query to the log, with the log timestamp
+    and IP address, name, type and class.  Default is no.
+    Note that it takes time to print these lines which makes the
+    server (significantly) slower. Odd (nonprintable) characters
+    in names are printed as '?'.
+~~~
+
+-- Unbound config file
+
+~~~ {.c}
+	if(worker->env.cfg->log_queries) {
+		char ip[128];
+		addr_to_str(&repinfo->addr, repinfo->addrlen, ip, sizeof(ip));
+		log_nametypeclass(0, ip, qinfo.qname, qinfo.qtype, qinfo.qclass);
+	}
+~~~
+
+-- Unbound `daemon/worker.c`
+
+# Query logging: [BIND9](http://ftp.isc.org/isc/bind9/)
+
+~~~ {.c}
+void
+ns_client_logv(ns_client_t *client, isc_logcategory_t *category,
+	       isc_logmodule_t *module, int level, const char *fmt, va_list ap)
+{
+	char msgbuf[4096];
+	char peerbuf[ISC_SOCKADDR_FORMATSIZE];
+	char signerbuf[DNS_NAME_FORMATSIZE], qnamebuf[DNS_NAME_FORMATSIZE];
+	const char *viewname = "";
+	const char *sep1 = "", *sep2 = "", *sep3 = "", *sep4 = "";
+	const char *signer = "", *qname = "";
+	dns_name_t *q = NULL;
+
+	vsnprintf(msgbuf, sizeof(msgbuf), fmt, ap);
+
+	ns_client_name(client, peerbuf, sizeof(peerbuf));
+
+	if (client->signer != NULL) {
+		dns_name_format(client->signer, signerbuf, sizeof(signerbuf));
+		sep1 = "/key ";
+		signer = signerbuf;
+	}
+
+	q = client->query.origqname != NULL
+		? client->query.origqname : client->query.qname;
+	if (q != NULL) {
+		dns_name_format(q, qnamebuf, sizeof(qnamebuf));
+		sep2 = " (";
+		sep3 = ")";
+		qname = qnamebuf;
+	}
+
+	if (client->view != NULL && strcmp(client->view->name, "_bind") != 0 &&
+	    strcmp(client->view->name, "_default") != 0) {
+		sep4 = ": view ";
+		viewname = client->view->name;
+	}
+
+	isc_log_write(ns_g_lctx, category, module, level,
+		      "client %s%s%s%s%s%s%s%s: %s",
+		      peerbuf, sep1, signer, sep2, qname, sep3,
+		      sep4, viewname, msgbuf);
+}
+~~~
+
+-- BIND9 `bin/named/query.c`
+
+# Dealing with DNS text logs
+
+~~~
+Jun 09 20:24:41 unbound[30101:0] info: start of service (unbound 1.4.21).
+Jun 09 20:24:43 unbound[30101:0] info: 127.0.0.1 www.example.com. A IN
+Jun 09 20:24:50 unbound[30101:0] info: 127.0.0.1 www.isc.org. A IN
+Jun 09 20:24:54 unbound[30101:0] info: 127.0.0.1 www.example.com. AAAA IN
+Jun 09 20:24:57 unbound[30101:0] info: 127.0.0.1 www.isc.org. AAAA IN
+~~~
+
+~~~
+Jun 10 02:48:43 zappa named[6666]: client 70.89.251.89#37412 (jj.mycre.ws):
+    query: jj.mycre.ws IN TXT -E (149.20.54.65)
+Jun 10 02:48:44 zappa named[6666]: client 70.89.251.89#58265 (jj.mycre.ws):
+    query: jj.mycre.ws IN TXT -ET (149.20.54.65)
+~~~
+
+Protocol elements have been converted to text format.
+
+How to parse? (Regular expressions? Now you have two problems...)
+
+Different DNS servers use their own formats.
+
+# [Google Public DNS](https://developers.google.com/speed/public-dns/privacy)
+
+![](images/google_public_dns.png)
+
+# Passive DNS replication
+
+![](diagrams/passive_dns_replication.png)
+
+# Passive DNS replication
+
+Log information about **zone content**:
+
+* Nameserver IP address.
+* Record name.
+* Record type.
+* Record data.
+
+[`Packet capture`](http://en.wikipedia.org/wiki/Pcap) based.
+
+Core idea: pull records out of **binary DNS response messages**.
+
+# Passive DNS replication: BFK
+
+<embed src="papers/weimer_passive_dns_replication.pdf" width="900" height="576">
+
+# Passive DNS replication: ISC
+<embed src="papers/edmonds_passive_dns_architecture.pdf" width="900" height="576">
+
+# Dealing with DNS packet captures
+
+~~~
+14:48:26.002226 IP 69.94.222.154.32975 > 198.41.0.4.53: 64443% [1au] NS? . (28)
+14:48:26.026313 IP 198.41.0.4.53 > 69.94.222.154.32975: 64443*- 13/0/20 NS
+K.ROOT-SERVERS.NET., NS L.ROOT-SERVERS.NET., NS M.ROOT-SERVERS.NET., NS
+A.ROOT-SERVERS.NET., NS B.ROOT-SERVERS.NET., NS C.ROOT-SERVERS.NET., NS
+D.ROOT-SERVERS.NET., NS E.ROOT-SERVERS.NET., NS F.ROOT-SERVERS.NET., NS
+G.ROOT-SERVERS.NET., NS H.ROOT-SERVERS.NET., NS I.ROOT-SERVERS.NET., NS
+J.ROOT-SERVERS.NET. (615)
+~~~
+
+DNS messages are encoded into packets.
+
+Query messages fit into one packet.
+
+Response messages sometimes require multiple packets.
+
+# Dealing with DNS packet captures
+
+![](images/wireshark_jj.png)
+
+# Dealing with DNS packet captures
+
+Need to:
+
+* Reconstruct query/response state.
+
+* Reassemble UDP fragments.
+
+* Verify UDP checksums.
+
+* Reassemble TCP streams.
+
+Why bother?
+
+# Introducing _dnstap_
+
+* Key insights:
+
+1) Query logging does not imply text format logging.
+
+2) Passive DNS replication does not imply packet capture.
+
+# Introducing _dnstap_
+
+* Flexible, structured event replication format for DNS servers.
+
+* DNS server hooks for generating `dnstap` format payloads.
+
+* Helper library `libdnstap` for adding support to servers.
+
+* Capture tool for receiving payloads from `dnstap`-enabled servers.
+
+#
+
+![](diagrams/dnstap.png)
+
+# Getting the code
+
+Website:
+
+**<http://dnstap.info>**
+
+Open source code repositories are located on GitHub:
+
+**<https://github.com/dnstap>**
+
+# Getting the code: [`dnstap.pb`](https://github.com/dnstap/dnstap.pb)
+
+This is the [Protocol Buffers](https://code.google.com/p/protobuf/) schema
+defining the layout of `dnstap` payloads.
+
+Use this if you want to process `dnstap` payloads in your programming language
+of choice.
+
+~~~
+$ git clone git://github.com/dnstap/dnstap.pb.git
+~~~
+
+Here's a [direct link](https://github.com/dnstap/dnstap.pb/blob/master/dnstap.proto) to the schema.
+
+You don't need this unless you're writing code that needs to decode `dnstap`
+payloads.
+
+# [`dnstap.pb`](https://github.com/dnstap/dnstap.pb) schema `(1/2)`
+
+~~~
+message Dnstap {
+    optional bytes      identity;
+    optional bytes      version;
+    enum Type {
+        MESSAGE;
+    }
+    required Type       type;
+    optional Message    message;
+}
+
+enum SocketFamily {
+    INET;
+    INET6;
+}
+
+enum SocketProtocol {
+    UDP;
+    TCP;
+}
+~~~
+
+# [`dnstap.pb`](https://github.com/dnstap/dnstap.pb) schema `(2/2)`
+
+~~~
+message Message {
+    enum Type {
+        AUTH_QUERY;
+        AUTH_RESPONSE;
+        RESOLVER_QUERY;
+        RESOLVER_RESPONSE;
+        CLIENT_QUERY;
+        CLIENT_RESPONSE;
+        FORWARDER_QUERY;
+        FORWARDER_RESPONSE;
+    }
+    required Type               type;
+    optional SocketFamily       socket_family;
+    optional SocketProtocol     socket_protocol;
+    optional bytes              query_address;
+    optional bytes              response_address;
+    optional uint32             query_port;
+    optional uint32             response_port;
+    optional uint32             message_id;
+    optional bytes              query_name;
+    optional uint32             query_type;
+    optional uint32             query_class;
+    optional uint64             query_time_sec;
+    optional fixed32            query_time_nsec;
+    optional bytes              query_message;
+    optional bytes              query_zone;
+    optional uint64             response_time_sec;
+    optional fixed32            response_time_nsec;
+    optional bytes              response_message;
+}
+~~~
+
+# Getting the code: [`dnstap`](https://github.com/dnstap/dnstap)
+
+This is the C library for adding `dnstap` support to your DNS server.
+
+~~~
+# apt-get install protobuf-c-compiler
+# git clone git://github.com/dnstap/dnstap.git
+# cd dnstap && ./autogen.sh && ./configure && make && make install
+~~~
+
+You need this if you're a DNS programmer adding `dnstap` support to your
+nameserver, or if you're a sysadmin compiling a nameserver with `dnstap`
+support.
+
+# Getting the code: [`unbound`/`dnstap`](https://github.com/dnstap/unbound)
+
+This is [NLNet Labs'](http://nlnetlabs.nl/) [Unbound](http://unbound.net/) DNS
+server, patched to generate `dnstap` payloads.
+
+~~~
+$ git clone git@github.com:dnstap/unbound.git
+$ cd unbound && ./configure --enable-dnstap && make && make install
+~~~
+
+Add to `unbound.conf`:
+
+~~~
+server:
+    dnstap-enable: yes
+    dnstap-socket-path: "/var/run/unbound/dnstap.sock"
+    dnstap-send-identity: yes
+    dnstap-send-version: yes
+    dnstap-log-resolver-response-messages: yes
+    dnstap-log-client-query-messages: yes
+~~~
+
+Start Unbound and it will begin generating `dnstap/Message` payloads on the
+`dnstap-socket-path`.
+
+You also need a capture tool listening on the other end of the `dnstap` socket.
+
+# Getting the code: [`dnstap-tools`](https://github.com/dnstap/dnstap-tools)
+
+XXX: describe `dnstap` capture tool here.
+
+# Running `dnstap`
+
+XXX: show an example of `dnstap` capture tool output here.
+
+# Future plans
+
+Add support for more DNS servers.
+
+Rigorous testing.
+
+Documentation.
+
+Benchmarking.
+
+Define more event types like:
+
+* Server startup/shutdown.
+
+* Cache updates.
+
+* Client queries that triggered `RPZ`.
+
+Write a specification.
+
+Develop tools that can consume `dnstap` payload data.
+
+# Summary
+
+Examined existing `syslog` and `pcap`-based DNS monitoring technologies.
+
+Introduced new [`dnstap`](https://github.com/dnstap) technology that combines
+aspects of both of these traditional approaches.
+
+Demonstrated how to download and use the released code.
+
+#
