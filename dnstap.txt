@@ -2,6 +2,12 @@
 % Robert Edmonds (<edmonds@isc.org>)
 % 13 June 2013
 
+# Slides and code
+
+<h1>
+<http://dnstap.info/>
+</h1>
+
 # Introduction
 
 The DNS protocol is really complicated.
@@ -215,7 +221,8 @@ Need to:
 
 * Reassemble TCP streams.
 
-Why bother?
+This is hard. The networking stack and DNS server are already doing these
+things. Why bother?
 
 # Introducing _dnstap_
 
@@ -366,13 +373,64 @@ Start Unbound and it will begin generating `dnstap/Message` payloads on the
 
 You also need a capture tool listening on the other end of the `dnstap` socket.
 
-# Getting the code: [`dnstap-tools`](https://github.com/dnstap/dnstap-tools)
+# Getting the code: [`golang-dnstap`](https://github.com/dnstap/golang-dnstap)
 
-XXX: describe `dnstap` capture tool here.
+This is the [Go](http://golang.org/) language library for working with
+`dnstap` sockets, log files, and message payloads. It also includes a
+command-line capture tool.
+
+~~~
+# apt-get install golang
+$ go get -u github.com/dnstap/golang-dnstap/dnstap
+~~~
 
 # Running `dnstap`
 
-XXX: show an example of `dnstap` capture tool output here.
+Example output from the `dnstap` command-line tool with a
+`dnstap`-enabled Unbound recursive DNS server connected.
+
+~~~
+$ dnstap -s /tmp/dnstap.sock
+dnstap: opened input socket: /tmp/dnstap.sock
+23:28:56.955950 CQ 127.0.0.1 UDP "www.google.com." IN A
+23:28:56.968771 RR 192.58.128.30 UDP "." IN NS
+23:28:57.020234 RR 2001:500:2d::d UDP "g.root-servers.net." IN AAAA
+23:28:57.025925 RR 2001:500:1::803f:235 UDP "b.root-servers.net." IN AAAA
+23:28:57.043608 RR 2001:7fd::1 UDP "c.root-servers.net." IN AAAA
+23:28:57.096600 RR 202.12.27.33 UDP "www.google.com." IN A
+23:28:57.099600 RR 202.12.27.33 UDP "e.root-servers.net." IN AAAA
+23:28:57.115804 RR 192.203.230.10 UDP "i.gtld-servers.net." IN AAAA
+23:28:57.117032 RR 192.58.128.30 UDP "c.gtld-servers.net." IN AAAA
+23:28:57.149958 RR 192.33.14.30 UDP "j.gtld-servers.net." IN AAAA
+23:28:57.164234 RR 2001:503:a83e::2:30 UDP "c.gtld-servers.net." IN AAAA
+23:28:57.180134 RR 2001:503:83eb::2:31 UDP "j.gtld-servers.net." IN AAAA
+23:28:57.184770 RR 192.35.51.30 UDP "www.google.com." IN A
+23:28:57.212179 RR 216.239.38.10 UDP "www.google.com." IN A
+23:28:57.219282 RR 216.239.36.10 UDP "ns2.google.com." IN AAAA
+23:28:57.220253 RR 216.239.38.10 UDP "ns3.google.com." IN AAAA
+23:28:57.222184 RR 192.31.80.30 UDP "i.gtld-servers.net." IN AAAA
+23:28:57.223815 RR 192.26.92.31 UDP "e2.gtld-servers.net." IN AAAA
+23:28:57.225247 RR 192.35.51.30 UDP "e.gtld-servers.net." IN AAAA
+23:28:57.226564 RR 192.36.148.17 UDP "k.gtld-servers.net." IN AAAA
+23:28:57.226806 RR 192.35.51.30 UDP "g.gtld-servers.net." IN AAAA
+23:28:57.227977 RR 216.239.34.10 UDP "ns1.google.com." IN AAAA
+23:28:57.229058 RR 216.239.34.10 UDP "ns4.google.com." IN AAAA
+23:28:57.244416 RR 192.43.172.30 UDP "l.gtld-servers.net." IN AAAA
+23:28:57.253047 RR 2001:503:a83e::2:30 UDP "k.gtld-servers.net." IN AAAA
+23:28:57.254144 RR 2001:503:a83e::2:31 UDP "i.gtld-servers.net." IN AAAA
+23:28:57.258091 RR 192.42.93.31 UDP "g2.gtld-servers.net." IN AAAA
+23:28:57.259196 RR 192.35.51.31 UDP "d2.gtld-servers.net." IN AAAA
+23:28:57.260140 RR 192.42.93.31 UDP "l2.gtld-servers.net." IN AAAA
+23:28:57.261115 RR 192.31.80.31 UDP "c.gtld-servers.net." IN AAAA
+23:28:57.262082 RR 2001:503:a83e::2:31 UDP "h2.gtld-servers.net." IN AAAA
+23:28:57.311686 RR 192.48.79.30 UDP "h.gtld-servers.net." IN AAAA
+23:28:57.313437 RR 192.26.92.31 UDP "k.gtld-servers.net." IN AAAA
+23:28:57.315933 RR 192.35.51.31 UDP "e.gtld-servers.net." IN AAAA
+23:28:57.317539 RR 192.31.80.31 UDP "g.gtld-servers.net." IN AAAA
+23:28:57.336650 RR 192.35.51.31 UDP "l.gtld-servers.net." IN AAAA
+23:28:57.339383 RR 2001:503:83eb::2:31 UDP "h.gtld-servers.net." IN AAAA
+23:28:57.342427 RR 192.35.51.31 UDP "f2.gtld-servers.net." IN AAAA
+~~~
 
 # Future plans
 
@@ -384,17 +442,28 @@ Documentation.
 
 Benchmarking.
 
+Write a specification.
+
+Develop more tools that can consume `dnstap` payload data.
+
+# Future plans
+
 Define more event types like:
 
 * Server startup/shutdown.
 
-* Cache updates.
+* RRset cache updates.
 
-* Client queries that triggered `RPZ`.
+* Client queries that triggered `RPZ` filtering.
 
-Write a specification.
+Add more features to the `dnstap` command-line tool like:
 
-Develop tools that can consume `dnstap` payload data.
+* Match `query_address` or `response_address` against a list of IP
+addresses or prefixes.
+
+* Match `query_name` against a list of domain names.
+
+* Match specific DNS `OPCODE` or `RCODE` values.
 
 # Summary
 
